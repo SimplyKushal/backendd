@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import pickle
 import cv2
@@ -8,28 +9,29 @@ import base64
 
 app = FastAPI()
 
-# Load the trained models
-try:
-    model_dict_alphabet = pickle.load(open('./model_A_to_Z.p', 'rb'))
-    model_alphabet = model_dict_alphabet['model']
-    print("Alphabet model loaded successfully.")
-except Exception as e:
-    print(f"Error loading alphabet model: {e}")
+# Enable CORS to allow frontend connection
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-try:
-    model_dict_number = pickle.load(open('./model_numbers.p', 'rb'))
-    model_number = model_dict_number['model']
-    print("Number model loaded successfully.")
-except Exception as e:
-    print(f"Error loading number model: {e}")
+# Load trained models
+def load_model(file_path, label_encoder=False):
+    try:
+        model_dict = pickle.load(open(file_path, 'rb'))
+        model = model_dict['model']
+        print(f"Model {file_path} loaded successfully.")
+        return (model, model_dict.get('label_encoder')) if label_encoder else model
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return None if not label_encoder else (None, None)
 
-try:
-    model_dict_gujarati = pickle.load(open('./model_gujarati.p', 'rb'))
-    model_gujarati = model_dict_gujarati['model']
-    label_encoder_gujarati = model_dict_gujarati['label_encoder']
-    print("Gujarati model loaded successfully.")
-except Exception as e:
-    print(f"Error loading Gujarati model: {e}")
+model_alphabet = load_model('./model_A_to_Z.p')
+model_number = load_model('./model_numbers.p')
+model_gujarati, label_encoder_gujarati = load_model('./model_gujarati.p', label_encoder=True)
 
 # Gujarati to English phonetic mapping
 gujarati_to_english = {
@@ -48,10 +50,11 @@ mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 hands = mp_hands.Hands(min_detection_confidence=0.9, min_tracking_confidence=0.9)
 
-@app.websocket("/ws")
+@app.websocket("/")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     print("Client connected!")
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -65,6 +68,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 frame_base64 = message["frame"]
                 expected_sign = message["expected_sign"]
                 mode = message["mode"]
+
                 frame_bytes = base64.b64decode(frame_base64)
                 frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
                 frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
@@ -88,13 +92,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         # Prediction
                         try:
-                            if mode == "alphabet":
+                            if mode == "alphabet" and model_alphabet:
                                 prediction = model_alphabet.predict([np.asarray(data_aux)])
                                 predicted_character = prediction[0].upper()
-                            elif mode == "number":
+                            elif mode == "number" and model_number:
                                 prediction = model_number.predict([np.asarray(data_aux)])
                                 predicted_character = prediction[0].upper()
-                            elif mode == "gujarati":
+                            elif mode == "gujarati" and model_gujarati and label_encoder_gujarati:
                                 prediction = model_gujarati.predict([np.asarray(data_aux)])
                                 predicted_index = prediction[0]
                                 predicted_character = label_encoder_gujarati.inverse_transform([predicted_index])[0]
@@ -106,11 +110,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         # Draw bounding box
                         try:
-                            x1, y1 = int(min(x_) * W), int(min(y_) * H)
-                            x2, y2 = int(max(x_) * W), int(max(y_) * H)
-                            cv2.rectangle(frame, (x1 - 10, y1 - 10), (x2 + 10, y2 + 10), (0, 0, 0), 2)
-                            cv2.putText(frame, predicted_character, (x1, y1 - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            if x_ and y_:
+                                x1, y1 = int(min(x_) * W), int(min(y_) * H)
+                                x2, y2 = int(max(x_) * W), int(max(y_) * H)
+                                cv2.rectangle(frame, (x1 - 10, y1 - 10), (x2 + 10, y2 + 10), (0, 0, 0), 2)
+                                cv2.putText(frame, predicted_character, (x1, y1 - 10),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                         except Exception as e:
                             print(f"Bounding Box Error: {e}")
 
@@ -118,6 +123,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     _, buffer = cv2.imencode('.jpg', frame)
                     frame_base64 = base64.b64encode(buffer).decode('utf-8')
                     await websocket.send_text(json.dumps({"frame": frame_base64, "prediction": predicted_character}))
+
     except Exception as e:
         print(f"WebSocket Error: {e}")
     finally:
