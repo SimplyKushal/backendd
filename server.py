@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import pickle
@@ -126,11 +126,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     frame_base64 = base64.b64encode(buffer).decode('utf-8')
                     await websocket.send_text(json.dumps({"frame": frame_base64, "prediction": predicted_character}))
 
+    except WebSocketDisconnect:
+        print("WebSocket Disconnected by client.")
     except Exception as e:
         print(f"WebSocket Error: {e}")
     finally:
-        print("Closing WebSocket connection...")
-        await websocket.close()
+        if not websocket.client_state.closed:  # Prevent double closing
+            print("Closing WebSocket connection...")
+            await websocket.close()
         cv2.destroyAllWindows()
 
 # Run the server
