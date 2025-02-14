@@ -6,6 +6,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import base64
+import os
+import uvicorn
 
 app = FastAPI()
 
@@ -133,5 +135,5 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # Run the server
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8001, ws="websockets", reload=True)
+    port = int(os.getenv("PORT", 8001))  # Default to 8001 if PORT is not set
+    uvicorn.run("server:app", host="0.0.0.0", port=port, ws="websockets", reload=True)
